@@ -1,51 +1,74 @@
 import math
 from scipy.integrate import quad
 import numpy as np
-import numpy as np
 import sympy
-
-from input_params import *
+from scipy.optimize import fsolve
 
 class Deffect:
     """
     Состояние трещины
     """
     def __init__(self, a, c):
-        self.a = a
-        self.c = c
+        self.a = a # m
+        self.c = c # m
 
     @property
     def double_c(self):
-        return 2 * self.c
+        return 2 * self.c # m
 
 class Steel:
     """
     Параметры стали
     """
-    def __init__(self, C, m, Rp02_min, Rp02_max, Rm_min, Rm_max, E_module, mu):
+    def __init__(self, C, m, T, Rp02_min, Rp02_max, Rm_min, Rm_max, E_module, mu, name):
         self.C  = C
-        slef.m  = m
+        self.m  = m
         self.mu = mu
         self.Rp02_min = Rp02_min # Pa
         self.Rp02_max = Rp02_max # Pa
         self.Rm_min   = Rm_min   # Pa
         self.Rm_max   = Rm_max   # Pa
         self.E_module = E_module # Pa
+        self.name = name
+        self.T = T # cel
+
+    @property
+    def ro(self):
+        if self.name == "Сталь 20":
+            if self.T == 20:
+                return 7856 # kg/m3
+            elif self.T == 150:
+                return 7819 # kg/m3
+            elif self.T == 285:
+                return 7775 # kg/m3
+        elif self.name == "Сталь 16ГС":
+           return 7850
+        raise ValueError('Cant calculate the density.')
+
+    @property
+    def structure_type(self):
+        if self.name == "Сталь 20":
+            return None
+        elif self.name == "Сталь 16ГС":
+            return None
+        raise ValueError('Cant define structure.')
+
 
 class Problem:
     """
     Состояние системы в целом. Параметры окружающей среды и трещина
     """
-    def __init__(self, deffect, t, Dout, p, T, M, C, m):
+    def __init__(self, deffect, steel, t, Dout, p, N=None, Nx=0, Ny=0, Nz=0, M=None, Mx=0, My=0, Mz=0,):
         self.deffect = deffect
-        self.t = t
-        self.Dout = Dout
-        self.Din  = Dout - 2*t
-        self.p = p
-        self.T = T
-        self.M = M
-        self.C = C
-        self.m = m
+        self.steel = steel
+        self.t = t # m
+        self.Dout = Dout # m
+        self.Din  = Dout - 2*t # m
+        self.p = p # Pa
+        self.M = M if M else (Mx**2 + My**2 + Mz**2)**0.5 # N*m
+        self.N = N if N else (Nx**2 + Ny**2 + Nz**2)**0.5 # N*m
+        self.C = steel.C
+        self.m = steel.m
 
     @property
     def Rout(self):
@@ -55,23 +78,14 @@ class Problem:
     def Rin(self):
         return self.Din/2
 
-    @property
-    def ro(self):
-        if self.T == 20:
-            return 7856
-        elif self.T == 150:
-            return 7819
-        elif self.T == 285:
-            return 7775
-        raise ValueError('Cant calculate the density.')
-
-class Solve:
+class Solver:
     """
     Объект решения
     """
-    def __init__(self, problem, deffect, type_):
+    def __init__(self, problem, deffect, steel, type_):
         self.problem = problem
         self.deffect = deffect
+        self.steel = steel
         self.type = type_
 
     def gamma_c(self):
@@ -85,7 +99,7 @@ class Solve:
         c = self.deffect.c
         t = self.problem.t
         Rin = self.problem.Rin
-        ro = self.problem.ro
+        ro = self.steel.ro
         if self.type == 'Кольцевой эффект':
             m = 1 - a / (t * Rin)**0.5 * (1 - (a / c)**0.5)
         elif self.type == 'Продольный эффект':
@@ -116,10 +130,13 @@ class Solve:
 
 
     def sig_m(self):
-        if self.type == 'Кольцевой эффект':
-            sig_m = self.problem.p * self.problem.Rin**2/(self.problem.Rout**2 - self.problem.Rin**2)
-        elif self.type == 'Продольный эффект':
+        if self.type == 'Кольцевой дефект':
+            section = math.pi * (self.problem.Rout ** 2 - self.problem.Rin ** 2)
+            sig_m = self.problem.p * self.problem.Rin**2/(self.problem.Rout**2 - self.problem.Rin**2) + self.problem.N / section
+        elif self.type == 'Продольный дефект':
             sig_m = self.problem.p * self.problem.Rin / self.problem.t
+        else:
+            raise ValueError('WRONG DEFFECT NAME!')
         return sig_m
 
     @staticmethod
@@ -130,21 +147,22 @@ class Solve:
         """
         Интегральное
         """
-        if self.type == 'Кольцевой эффект':
-            #fun = lambda y, M, I: M/I * y
-            #c = self.problem.Din/self.problem.Dout
+        if self.type == 'Кольцевой дефект':
             I = self.I_moment(self.problem.Rout-self.problem.t/2, self.problem.t)
-            #sig_b = quad(fun, self.problem.Rin, self.problem.Rout, args=(self.problem.M*1e-6, I))[0]
-            sig_b = self.problem.M*1e-6 / I * self.problem.Rout
-        elif self.type == 'Продольный эффект':
+            sig_b = self.problem.M/ I * self.problem.Rout
+        elif self.type == 'Продольный дефект':
             sig_b = 0
+        else:
+            raise ValueError('WRONG DEFFECT NAME!')
         return sig_b
 
     def sig_a(self):
-        return self.sig_m()  + self.sig_b() * self.problem.Rin/self.problem.Rout
+        sig_a = self.sig_m()  + self.sig_b() * self.problem.Rin/self.problem.Rout
+        return sig_a
 
     def sig_c(self):
-        return self.sig_m()  + self.sig_b() * (self.problem.Rin + self.deffect.a)/self.problem.Rout
+        sig_c = self.sig_m()  + self.sig_b() * (self.problem.Rin + self.deffect.a)/self.problem.Rout
+        return sig_c
 
     def calc_Sig_eq(self, point_name):
         a = self.deffect.a
@@ -160,10 +178,12 @@ class Solve:
             sig_eq = 0.82*sig_a + 0.18*sig_c
         else:
             raise ValueError('Idk point name...')
+
         return sig_eq
 
     @staticmethod
     def calc_K(Y, Sig_eq, a):
+        print(Y, Sig_eq, a)
         return Y * Sig_eq * a ** 0.5
 
     def changing_per_iter(self):
@@ -178,9 +198,58 @@ class Solve:
                 continue
             Sig_eq = self.calc_Sig_eq(point)
             Y = self.calc_Y(point)
-            K = self.calc_K(Y, Sig_eq, self.deffect.a)
-            change = C * K**self.problem.m
+            K = self.calc_K(Y, Sig_eq*1e-6, self.deffect.a)
+            change = self.steel.C * (K)**self.problem.m
             res[point] = change
             res['delK_'+point] = K
-
+            print(res)
         return res
+
+class Find2cc:
+    """docstring for Find2cc."""
+
+    def __init__(self, Solver, Deffect, Problem, Steel, problem_type):
+        self.solver = Solver
+        self.problem = Problem
+        self.steel = Steel
+        self.deffect = Deffect
+        self.problem_type = problem_type
+
+    @property
+    def sig_f(self):
+        if self.problem_type == "ППН":
+            return 0.42*(self.steel.Rp02_min + self.steel.Rm_min)
+        if self.problem_type == "ЛРН":
+            tet = 2*self.deffect.c / (2*self.problem.Rin)
+            pi = math.pi
+            f = self.deffect.a / self.problem.t
+            ka = 1-f*(tet/pi + math.sin(2*tet)/(2*pi) - 2*math.sin(tet)/pi*math.cos(tet))
+            kb_up = math.sin(tet)/pi*f+(1-f*tet/pi)*math.cos(tet)
+            kb_down = (1-f*tet/pi)*(1-f*(tet/pi+math.sin(2*tet)/(2*pi))-f**2*2*(math.sin(tet))**2/pi**2)
+            kb = kb_up / kb_down
+            return ka*self.solver.sig_m() + kb*self.solver.sig_b()
+
+    def dva_cc(self, a):
+        sig_f = self.sig_f
+
+        Rin = self.problem.Rin
+        sig_m = self.solver.sig_m()
+        sig_b = self.solver.sig_b()
+
+        func = lambda dva_cc: 2/math.pi * sig_f * (2 * math.sin(math.pi/2 * (1 + a * - dva_cc/(2*Rin*math.pi) - sig_m/sig_f)) - a * math.sin(dva_cc/(2*Rin)) ) - sig_b
+        init_guess = 0.5
+        dva_cc_solution = fsolve(func, init_guess)
+
+        return dva_cc_solution
+
+    def find_a(self, dva_cc):
+        sig_f = self.sig_f
+        Rin = self.problem.Rin
+        sig_m = self.solver.sig_m()
+        sig_b = self.solver.sig_b()
+
+        func = lambda a: 2/math.pi * sig_f * (2 * math.sin(math.pi/2 * (1 + a * - dva_cc/(2*Rin*math.pi) - sig_m/sig_f)) - a * math.sin(dva_cc/(2*Rin)) ) - sig_b
+        init_guess = 0.5
+        dva_cc_solution = fsolve(func, init_guess)
+
+        return dva_cc_solution

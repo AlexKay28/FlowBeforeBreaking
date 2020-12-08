@@ -2,7 +2,7 @@ import configparser
 import json
 
 config = configparser.ConfigParser()
-config.read('config.ini')
+config.read('config1.ini')
 
 # data for problem object
 Dout = float(config['tube params']['Dout'])

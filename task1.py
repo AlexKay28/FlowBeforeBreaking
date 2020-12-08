@@ -1,12 +1,11 @@
 import json
-from input_params import *
+from objects import Deffect, Steel, Problem, Solver
+from input_params1 import *
 
-from objects import Deffect, Steel, Problem, Solve
-from input_params import *
 """
 Deffect - оъект трещины
 Problem - обхект состояния среды
-Solve - объект поставновки и решения задачи
+LenChange - объект поставновки и решения задачи
 """
 
 
@@ -31,7 +30,7 @@ def single_story(a_0, c_0, type_):
 
         a_was, c_was = deffect.a, deffect.c
         for cycle in range(N):
-            solve = Solve(problem, deffect, type_).changing_per_iter()
+            solve = Solver(problem, deffect, type_).changing_per_iter()
             deffect.a += solve['C']
             deffect.c += solve['D']
             logs['C'][cycle_name].append(deffect.a)
