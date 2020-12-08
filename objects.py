@@ -132,7 +132,8 @@ class Solver:
     def sig_m(self):
         if self.type == 'Кольцевой дефект':
             section = math.pi * (self.problem.Rout ** 2 - self.problem.Rin ** 2)
-            sig_m = self.problem.p * self.problem.Rin**2/(self.problem.Rout**2 - self.problem.Rin**2) + self.problem.N / section
+            sig_m = self.problem.p * self.problem.Rin**2/(self.problem.Rout**2 - self.problem.Rin**2) \
+                    + self.problem.N / section
         elif self.type == 'Продольный дефект':
             sig_m = self.problem.p * self.problem.Rin / self.problem.t
         else:

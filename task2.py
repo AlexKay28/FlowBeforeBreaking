@@ -2,7 +2,6 @@ import numpy as np
 import scipy
 import seaborn as sns
 from objects import Deffect, Steel, Problem, Solver, Find2cc
-#from input_params2 import *
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -11,7 +10,7 @@ def find_2cc(steel, deffect, problem, problem_type, defect_type, alpha):
     solver  = Solver(problem, deffect, steel, defect_type)
     find2cc = Find2cc(solver, deffect, problem, steel, problem_type)
     dva_cc  = find2cc.dva_cc(alpha)
-    return dva_cc
+    return solver.sig_b(), solver.sig_m(), dva_cc
 
 def find_alpha(steel, deffect, problem, effect_type, problem_type, dcc):
     solver  = Solver(problem, deffect, steel, effect_type)
@@ -20,6 +19,7 @@ def find_alpha(steel, deffect, problem, effect_type, problem_type, dcc):
     return dva_cc
 
 def calculate_interception(effect_type, problem_type, dva_cc, *args):
+    """ Not using """
     i = 0
     while deffect.a < t and 2*deffect.c < dva_cc:
         solver  = Solver(problem, deffect, steel, effect_type)
@@ -32,12 +32,12 @@ def calculate_interception(effect_type, problem_type, dva_cc, *args):
     return (deffect.a, 2*deffect.c, i)
 
 def calc_params_for_task2(steel, deffect, problem, defect_type, problem_type, alpha=1, dc_max=0.8):
-    dva_cc = find_2cc(steel, deffect, problem, problem_type, defect_type, alpha)
+    sig_b, sig_m, dva_cc = find_2cc(steel, deffect, problem, problem_type, defect_type, alpha)
     points = []
     for dcc in np.linspace(dva_cc, dva_cc+0.3, num=20):
         alpha = find_alpha(steel, deffect, problem, defect_type, problem_type, dcc)
         points.append((dcc , alpha))
-    return dva_cc, points
+    return sig_b, sig_m, dva_cc, points
 
 def create_picture(points, dva_cc, index):
     x = [0] + [p[0][0] for p in points]
@@ -50,6 +50,7 @@ def create_picture(points, dva_cc, index):
     plt.axvline(x[1])
     plt.title(f'model: 2cc={dva_cc}')
     plt.savefig(f"figures/picture{index}.png")
+    plt.close()
 
 def main(Dout=273e-3,
          t=16e-3,
@@ -70,22 +71,22 @@ def main(Dout=273e-3,
          defect_type='Кольцевой дефект',
          problem_type='ППН',
          index=None):
-
     # start point data for deffect
     a_0 = 0.2*t
     c_0 = 0.5*t
-
     steel = Steel(C, m, T, Rp02_min, Rp02_max, Rm_min, Rm_max, E_module, mu, steel_type)
     deffect = Deffect(a_0, c_0)
     problem = Problem(deffect, steel, t, Dout, p, Nz=Nz, Mx=Mx, My=My)
-
-    dva_cc, points = calc_params_for_task2(steel, deffect, problem, defect_type, problem_type)
-    #print(dva_cc)
-
+    sig_b, sig_m, dva_cc, points = calc_params_for_task2(steel, deffect, problem, defect_type, problem_type)
     create_picture(points, dva_cc, index)
-    return dva_cc
-
-
+    return [sig_b, sig_m, dva_cc]
 
 if __name__ == '__main__':
-    main()
+    while 1:
+        asked_question = input('Are u sure tpu wanted launch from main?[yN]')
+        if asked_question == 'y':
+            main()
+            break
+        elif asked_question == 'N':
+            break
+        print('pls, input correct answer')
