@@ -2,7 +2,10 @@ import math
 from scipy.integrate import quad
 import numpy as np
 import sympy
-from scipy.optimize import fsolve
+from scipy.optimize import fsolve, root, bisect
+
+import warnings
+warnings.filterwarnings("error")
 
 class Deffect:
     """
@@ -218,28 +221,49 @@ class Find2cc:
 
     @property
     def sig_f(self):
-        if self.problem_type == "ППН":
+        deffect_type = self.solver.type
+        if deffect_type == 'Кольцевой дефект':
             return 0.42*(self.steel.Rp02_min + self.steel.Rm_min)
-        if self.problem_type == "ЛРН":
-            tet = 2*self.deffect.c / (2*self.problem.Rin)
-            pi = math.pi
-            f = self.deffect.a / self.problem.t
-            ka = 1-f*(tet/pi + math.sin(2*tet)/(2*pi) - 2*math.sin(tet)/pi*math.cos(tet))
-            kb_up = math.sin(tet)/pi*f+(1-f*tet/pi)*math.cos(tet)
-            kb_down = (1-f*tet/pi)*(1-f*(tet/pi+math.sin(2*tet)/(2*pi))-f**2*2*(math.sin(tet))**2/pi**2)
-            kb = kb_up / kb_down
-            return ka*self.solver.sig_m() + kb*self.solver.sig_b()
+        if deffect_type == 'Продольный дефект':
+            if self.steel.name in ['Сталь 20', 'Сталь 16ГС']:
+                return 0.5*(self.steel.Rp02_min + self.steel.Rm_min)
+        raise ValueError('Steel not found')
+            # tet = 2*self.deffect.c / (2*self.problem.Rin)
+            # pi = math.pi
+            # f = self.deffect.a / self.problem.t
+            # ka = 1-f*(tet/pi + math.sin(2*tet)/(2*pi) - 2*math.sin(tet)/pi*math.cos(tet))
+            # kb_up = math.sin(tet)/pi*f+(1-f*tet/pi)*math.cos(tet)
+            # kb_down = (1-f*tet/pi)*(1-f*(tet/pi+math.sin(2*tet)/(2*pi))-f**2*2*(math.sin(tet))**2/pi**2)
+            # kb = kb_up / kb_down
+            # return ka*self.solver.sig_m() + kb*self.solver.sig_b()
+
+    def get_solution(self, fun):
+        """ Solve equation """
+        init_guess = 0.5
+        a, b = 0, 1
+        try:
+            #interested_variable = fsolve(fun, init_guess)
+            interested_variable = bisect(fun, a, b)
+        except (RuntimeWarning, ValueError)  as e:
+            interested_variable = None
+        return interested_variable
 
     def dva_cc(self, a):
+        f = 1 #a / self.problem.t
         sig_f = self.sig_f
-
         Rin = self.problem.Rin
         sig_m = self.solver.sig_m()
         sig_b = self.solver.sig_b()
+        if self.problem_type == "ППН":
+            func = lambda dva_cc: 2/math.pi * sig_f * (2 * math.sin(math.pi/2 * (1 + a * - dva_cc/(2*Rin*math.pi) - sig_m/sig_f)) - a * math.sin(dva_cc/(2*Rin)) ) - sig_b
+            init_guess = 0.5
+            dva_cc_solution = self.get_solution(func)
 
-        func = lambda dva_cc: 2/math.pi * sig_f * (2 * math.sin(math.pi/2 * (1 + a * - dva_cc/(2*Rin*math.pi) - sig_m/sig_f)) - a * math.sin(dva_cc/(2*Rin)) ) - sig_b
-        init_guess = 0.5
-        dva_cc_solution = fsolve(func, init_guess)
+        if self.problem_type == "ЛРН":
+            f = 1
+            func = lambda dva_cc: (1 - f * ((dva_cc/(2*Rin))/np.pi + (np.sin(2*(dva_cc/(2*Rin))))/(2*np.pi) - 2/np.pi * np.sin((dva_cc/(2*Rin)))*np.cos((dva_cc/(2*Rin)))))/((1 - f*(dva_cc/(2*Rin))/np.pi)*(1 - f*((dva_cc/(2*Rin))/np.pi + np.sin(2*(dva_cc/(2*Rin)))/(2*np.pi)) - (f**2) * 2 * np.sin((dva_cc/(2*Rin)))**2 / np.pi**2))*sig_m + (np.sin((dva_cc/(2*Rin)))/np.pi * f + (1 - f * (dva_cc/(2*Rin))/np.pi)*np.cos((dva_cc/(2*Rin))))/((1 - f*(dva_cc/(2*Rin))/np.pi)*(1 - f*((dva_cc/(2*Rin))/np.pi + np.sin(2*(dva_cc/(2*Rin)))/(2*np.pi)) - (f**2) * 2 * np.sin((dva_cc/(2*Rin)))**2 / np.pi**2))*sig_b - sig_f
+            init_guess = 0.3
+            dva_cc_solution = self.get_solution(func)
 
         return dva_cc_solution
 
@@ -248,9 +272,7 @@ class Find2cc:
         Rin = self.problem.Rin
         sig_m = self.solver.sig_m()
         sig_b = self.solver.sig_b()
-
         func = lambda a: 2/math.pi * sig_f * (2 * math.sin(math.pi/2 * (1 + a * - dva_cc/(2*Rin*math.pi) - sig_m/sig_f)) - a * math.sin(dva_cc/(2*Rin)) ) - sig_b
         init_guess = 0.5
-        dva_cc_solution = fsolve(func, init_guess)
-
-        return dva_cc_solution
+        a = self.get_solution(func)
+        return a
