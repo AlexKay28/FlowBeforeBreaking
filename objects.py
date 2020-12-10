@@ -2,7 +2,7 @@ import math
 from scipy.integrate import quad
 import numpy as np
 import sympy
-from scipy.optimize import fsolve, root, bisect
+from scipy.optimize import fsolve, bisect, newton_krylov, diagbroyden
 
 import warnings
 warnings.filterwarnings("error")
@@ -210,7 +210,6 @@ class Solver:
         return res
 
 class Find2cc:
-    """docstring for Find2cc."""
 
     def __init__(self, Solver, Deffect, Problem, Steel, problem_type):
         self.solver = Solver
@@ -228,43 +227,51 @@ class Find2cc:
             if self.steel.name in ['Сталь 20', 'Сталь 16ГС']:
                 return 0.5*(self.steel.Rp02_min + self.steel.Rm_min)
         raise ValueError('Steel not found')
-            # tet = 2*self.deffect.c / (2*self.problem.Rin)
-            # pi = math.pi
-            # f = self.deffect.a / self.problem.t
-            # ka = 1-f*(tet/pi + math.sin(2*tet)/(2*pi) - 2*math.sin(tet)/pi*math.cos(tet))
-            # kb_up = math.sin(tet)/pi*f+(1-f*tet/pi)*math.cos(tet)
-            # kb_down = (1-f*tet/pi)*(1-f*(tet/pi+math.sin(2*tet)/(2*pi))-f**2*2*(math.sin(tet))**2/pi**2)
-            # kb = kb_up / kb_down
-            # return ka*self.solver.sig_m() + kb*self.solver.sig_b()
 
     def get_solution(self, fun):
         """ Solve equation """
-        init_guess = 0.5
-        a, b = 0, 1
+        init_guess = 0.3
+        a, b = 0, 1.5
         try:
-            #interested_variable = fsolve(fun, init_guess)
-            interested_variable = bisect(fun, a, b)
-        except (RuntimeWarning, ValueError)  as e:
+            #interested_variable = fsolve(fun, init_guess)[0]
+            interested_variable = newton_krylov(fun, init_guess, verbose=False)
+            #interested_variable = diagbroyden(fun, init_guess, verbose=False)
+            #interested_variable = bisect(fun, a, b)
+        except (RuntimeWarning, ValueError, Exception)  as e:
             interested_variable = None
         return interested_variable
 
-    def dva_cc(self, a):
-        f = 1 #a / self.problem.t
+    def _tetta(self, dva_cc):
+        return dva_cc/(2*self.problem.Rin)
+
+    def _ka(self, dva_cc, f):
+        tetta = self.tetta(dva_cc)
+        ka_nominator = lambda dva_cc: np.sin(tetta/np.pi*f + (1 - f*tetta/np.pi)*np.cos(dva_cc))
+        denominator =  lambda dva_cc: (1 - f * tetta/np.pi)*(1 - f*(tetta/np.pi + np.sin(2*tetta/(2*np.pi)) - (f**2)*(2*(np.sin(tetta**2)/(np.pi**2)))
+        return ka_nominator(dva_cc)/denominator(dva_cc)
+
+    def _kb(self, dva_cc, f):
+        tetta = self.tetta(dva_cc)
+        kb_nominator = lambda dva_cc: 1 - f * (tetta/np.pi + np.sin(2*tetta/(2*np.pi) - 2*np.sin(tetta/np.pi*np.cos(tetta)
+        denominator =  lambda dva_cc: (1 - f * tetta/np.pi)*(1 - f*(tetta/np.pi + np.sin(2*tetta/(2*np.pi)) - (f**2)*(2*(np.sin(tetta**2)/(np.pi**2)))
+        return ka_nominator(dva_cc)/denominator(dva_cc)
+
+    def dva_cc(self, alpha):
+        f = self.deffect.a / self.problem.t
         sig_f = self.sig_f
         Rin = self.problem.Rin
         sig_m = self.solver.sig_m()
         sig_b = self.solver.sig_b()
         if self.problem_type == "ППН":
-            func = lambda dva_cc: 2/math.pi * sig_f * (2 * math.sin(math.pi/2 * (1 + a * - dva_cc/(2*Rin*math.pi) - sig_m/sig_f)) - a * math.sin(dva_cc/(2*Rin)) ) - sig_b
+            func = lambda dva_cc: 2/math.pi * sig_f * (2 * math.sin(math.pi/2 * (1 + alpha * - dva_cc/(2*Rin*math.pi) - sig_m/sig_f)) - alpha * math.sin(dva_cc/(2*Rin)) ) - sig_b
             init_guess = 0.5
             dva_cc_solution = self.get_solution(func)
-
-        if self.problem_type == "ЛРН":
-            f = 1
-            func = lambda dva_cc: (1 - f * ((dva_cc/(2*Rin))/np.pi + (np.sin(2*(dva_cc/(2*Rin))))/(2*np.pi) - 2/np.pi * np.sin((dva_cc/(2*Rin)))*np.cos((dva_cc/(2*Rin)))))/((1 - f*(dva_cc/(2*Rin))/np.pi)*(1 - f*((dva_cc/(2*Rin))/np.pi + np.sin(2*(dva_cc/(2*Rin)))/(2*np.pi)) - (f**2) * 2 * np.sin((dva_cc/(2*Rin)))**2 / np.pi**2))*sig_m + (np.sin((dva_cc/(2*Rin)))/np.pi * f + (1 - f * (dva_cc/(2*Rin))/np.pi)*np.cos((dva_cc/(2*Rin))))/((1 - f*(dva_cc/(2*Rin))/np.pi)*(1 - f*((dva_cc/(2*Rin))/np.pi + np.sin(2*(dva_cc/(2*Rin)))/(2*np.pi)) - (f**2) * 2 * np.sin((dva_cc/(2*Rin)))**2 / np.pi**2))*sig_b - sig_f
-            init_guess = 0.3
+        elif self.problem_type == "ЛРН":
+            f, init_guess = 1, 0.3
+            func = lambda dva_cc: self._ka(dva_cc, f)*sig_m + self._kb(dva_cc, f)*sig_b - sig_f
             dva_cc_solution = self.get_solution(func)
-
+        else:
+            raise ValueError('problem type not exists')
         return dva_cc_solution
 
     def find_a(self, dva_cc):
