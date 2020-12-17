@@ -81,6 +81,10 @@ class Problem:
     def Rin(self):
         return self.Din/2
 
+    @property
+    def Rm(self):
+        return (self.Rin + self.Rout)/2
+
 class Solver:
     """
     Объект решения
@@ -135,8 +139,7 @@ class Solver:
     def sig_m(self):
         if self.type == 'Кольцевой дефект':
             section = math.pi * (self.problem.Rout ** 2 - self.problem.Rin ** 2)
-            sig_m = self.problem.p * self.problem.Rin**2/(self.problem.Rout**2 - self.problem.Rin**2) \
-                    + self.problem.N / section
+            sig_m = self.problem.p * self.problem.Rin**2/(self.problem.Rout**2 - self.problem.Rin**2) + self.problem.N / section
         elif self.type == 'Продольный дефект':
             sig_m = self.problem.p * self.problem.Rin / self.problem.t
         else:
@@ -233,10 +236,10 @@ class Find2cc:
         init_guess = 0.3
         a, b = 0, 1.5
         try:
-            #interested_variable = fsolve(fun, init_guess)[0]
-            interested_variable = newton_krylov(fun, init_guess, verbose=False)
+            interested_variable = fsolve(fun, init_guess)[0]
+            #interested_variable = newton_krylov(fun, init_guess, verbose=False)
             #interested_variable = diagbroyden(fun, init_guess, verbose=False)
-            #interested_variable = bisect(fun, a, b)
+            #interested_variable = round(interested_variable, 3)
         except (RuntimeWarning, ValueError, Exception)  as e:
             interested_variable = None
         return interested_variable
@@ -244,35 +247,46 @@ class Find2cc:
     def _tetta(self, dva_cc):
         return dva_cc/(2*self.problem.Rin)
 
+    def _betta(self, dva_cc, alpha, sig_m, sig_f):
+        return math.pi/2 * (1 - alpha * self._tetta(dva_cc)/np.pi - sig_m/sig_f)
+
     def _ka(self, dva_cc, f):
-        tetta = self.tetta(dva_cc)
-        ka_nominator = lambda dva_cc: np.sin(tetta/np.pi*f + (1 - f*tetta/np.pi)*np.cos(dva_cc))
-        denominator =  lambda dva_cc: (1 - f * tetta/np.pi)*(1 - f*(tetta/np.pi + np.sin(2*tetta/(2*np.pi)) - (f**2)*(2*(np.sin(tetta**2)/(np.pi**2)))
+        tetta = self._tetta(dva_cc)
+        ka_nominator = lambda dva_cc: 1 - f*(tetta/np.pi + np.sin(2*tetta)/(2*np.pi) - 2*np.sin(tetta)/np.pi*np.cos(tetta))
+        denominator =  lambda dva_cc: (1 - f * tetta/np.pi)*(1 - f*(tetta/np.pi + np.sin(2*tetta)/(2*np.pi))) - (f**2)*(2*(np.sin(tetta)**2/(np.pi**2)))
         return ka_nominator(dva_cc)/denominator(dva_cc)
 
     def _kb(self, dva_cc, f):
-        tetta = self.tetta(dva_cc)
-        kb_nominator = lambda dva_cc: 1 - f * (tetta/np.pi + np.sin(2*tetta/(2*np.pi) - 2*np.sin(tetta/np.pi*np.cos(tetta)
-        denominator =  lambda dva_cc: (1 - f * tetta/np.pi)*(1 - f*(tetta/np.pi + np.sin(2*tetta/(2*np.pi)) - (f**2)*(2*(np.sin(tetta**2)/(np.pi**2)))
-        return ka_nominator(dva_cc)/denominator(dva_cc)
+        tetta = self._tetta(dva_cc)
+        kb_nominator = lambda dva_cc: np.sin(tetta)/np.pi * f + (1 - f*tetta/np.pi)*np.cos(tetta)
+        denominator =  lambda dva_cc: (1 - f * tetta/np.pi)*(1 - f*(tetta/np.pi + np.sin(2*tetta)/(2*np.pi)) - (f**2)*(2*(np.sin(tetta)**2/(np.pi**2))))
+        return kb_nominator(dva_cc)/denominator(dva_cc)
+
+    def check_possibility_to_use_formula(self, tetta, betta):
+        bool1 = betta >= 0 and betta <= np.pi / 2
+        bool2 = (tetta <= np.pi/2) if self.problem_type == 'ППН' else True
+        bool3 = (tetta + betta)<=np.pi if self.problem_type == 'ППН' else (-tetta + betta)<=np.pi
+        bool4 = (2*tetta <= np.pi) if (self.solver.sig_m()==0 or self.solver.sig_b()==0) else True
+        return (bool1 and bool2 and bool3 and bool4)
 
     def dva_cc(self, alpha):
-        f = self.deffect.a / self.problem.t
         sig_f = self.sig_f
-        Rin = self.problem.Rin
         sig_m = self.solver.sig_m()
         sig_b = self.solver.sig_b()
+        init_guess = 0.3
         if self.problem_type == "ППН":
-            func = lambda dva_cc: 2/math.pi * sig_f * (2 * math.sin(math.pi/2 * (1 + alpha * - dva_cc/(2*Rin*math.pi) - sig_m/sig_f)) - alpha * math.sin(dva_cc/(2*Rin)) ) - sig_b
-            init_guess = 0.5
+            func = lambda dva_cc: 2/np.pi * sig_f * (2 * np.sin(self._betta(dva_cc, alpha, sig_m, sig_f)) - alpha * np.sin(self._tetta(dva_cc))) - sig_b
             dva_cc_solution = self.get_solution(func)
         elif self.problem_type == "ЛРН":
-            f, init_guess = 1, 0.3
-            func = lambda dva_cc: self._ka(dva_cc, f)*sig_m + self._kb(dva_cc, f)*sig_b - sig_f
+            func = lambda dva_cc: self._ka(dva_cc, alpha)*sig_m + self._kb(dva_cc, alpha)*sig_b - sig_f
             dva_cc_solution = self.get_solution(func)
         else:
             raise ValueError('problem type not exists')
-        return dva_cc_solution
+
+        check_usability = None
+        if dva_cc_solution:
+            check_usability = self.check_possibility_to_use_formula(self._tetta(dva_cc_solution), self._betta(dva_cc_solution, alpha, sig_m, sig_f))
+        return dva_cc_solution, check_usability
 
     def find_a(self, dva_cc):
         sig_f = self.sig_f
@@ -280,6 +294,62 @@ class Find2cc:
         sig_m = self.solver.sig_m()
         sig_b = self.solver.sig_b()
         func = lambda a: 2/math.pi * sig_f * (2 * math.sin(math.pi/2 * (1 + a * - dva_cc/(2*Rin*math.pi) - sig_m/sig_f)) - a * math.sin(dva_cc/(2*Rin)) ) - sig_b
-        init_guess = 0.5
         a = self.get_solution(func)
         return a
+
+class B_K_method:
+    E = 1.83e11
+    Mu = 0.3
+    def __init__(self, deffect, problem, solver, find2cc):
+        self.deffect = deffect
+        self.problem = problem
+        self.solver = solver
+        self.find2cc = find2cc
+        self.sig_m = self.solver.sig_m()
+        self.sig_b = self.solver.sig_b()
+
+    def get_E(self):
+        return self.E
+
+    def get_Mu(self):
+        return self.Mu
+
+    def get_sig_f(self):
+        return self.find2cc.sig_f
+
+    @property
+    def sig_eqv(self):
+        return self.sig_m + self.sig_b
+
+    @property
+    def gamma(self):
+        x = 1/2**0.5 * (self.sig_eqv / self.find2cc.sig_f)
+        return (1-x**3) / (1-x**2)**2
+
+    def lambda_(self, c):
+        return (12*(1 - self.Mu**2))**0.25 * c / (self.problem.Rm * self.problem.t)**0.5
+
+    def alpha(self, c):
+        lambda_ = self.lambda_(c)
+        if lambda_ <= 5:
+            return (1 + 0.117*lambda_**2)**0.5
+        elif lambda_ <= 8 and lambda_ > 5:
+            return 1 + 0.1*lambda_ + 0.16*lambda_**2
+        else:
+            return 1 + 0.1*lambda_ + 0.16*lambda_**2
+            raise ValueError(f'lambda: {lambda_}>8 ')
+
+    def A0(self, c):
+        return 7.54 * (self.sig_eqv / self.E) * c**2
+
+    def get_COA(self, c):
+        if c == 0:
+            c = 1e-15
+        #print(self.alpha(c), self.gamma, self.A0(c))
+        return self.alpha(c) * self.gamma * self.A0(c)
+
+    def get_COD(self, c):
+        if c == 0:
+            c = 1e-15
+        COA = self.get_COA(c)
+        return 2*COA/(np.pi*c)
