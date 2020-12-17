@@ -16,7 +16,11 @@ eggs/
 .eggs/
 lib/
 lib64/
+figures
 figures/*
+figures1/*
+figures2/*
+figures3/*
 parts/
 sdist/
 var/

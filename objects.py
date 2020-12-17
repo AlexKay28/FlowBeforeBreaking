@@ -1,7 +1,9 @@
 import math
+import sys
 from scipy.integrate import quad
 import numpy as np
 import sympy
+from iapws import IAPWS97
 from scipy.optimize import fsolve, bisect, newton_krylov, diagbroyden
 
 import warnings
@@ -13,7 +15,7 @@ class Deffect:
     """
     def __init__(self, a, c):
         self.a = a # m
-        self.c = c # m
+        self.c = c if c > 0 else 1e-15 # m
 
     @property
     def double_c(self):
@@ -336,20 +338,131 @@ class B_K_method:
         elif lambda_ <= 8 and lambda_ > 5:
             return 1 + 0.1*lambda_ + 0.16*lambda_**2
         else:
+            #print(f'WARNING! lambda: {lambda_}>8')
             return 1 + 0.1*lambda_ + 0.16*lambda_**2
-            raise ValueError(f'lambda: {lambda_}>8 ')
+            #raise ValueError(f'lambda: {lambda_}>8 ')
 
     def A0(self, c):
         return 7.54 * (self.sig_eqv / self.E) * c**2
 
-    def get_COA(self, c):
+    def get_COA(self):
+        c = self.deffect.c
         if c == 0:
             c = 1e-15
         #print(self.alpha(c), self.gamma, self.A0(c))
         return self.alpha(c) * self.gamma * self.A0(c)
 
-    def get_COD(self, c):
+    def get_COD(self):
+        c = self.deffect.c
         if c == 0:
             c = 1e-15
-        COA = self.get_COA(c)
+        COA = self.get_COA()
         return 2*COA/(np.pi*c)
+
+class Flow_Q:
+
+    friction_coeff_G = 33.65*1e-6
+    friction_coeff_L = 6.53*1e-6
+    p_ex = 1e5
+
+    def __init__(self, deffect, problem, solver, find2cc, bkmethod):
+        self.deffect = deffect
+        self.problem = problem
+        self.solver = solver
+        self.find2cc = find2cc
+        self.bkmethod = bkmethod
+        self.p_0 = self.problem.p
+        self.c = self.deffect.c
+
+    @property
+    def L(self):
+        return 2 * self.deffect.c
+
+    @property
+    def w_0(self):
+        A_0 = self.bkmethod.get_COA() * (self.problem.Rout/self.problem.Rm)**2
+        return A_0 / self.L
+
+    @property
+    def w_ex(self):
+        A_ex = self.bkmethod.get_COA() * (self.problem.Rin/self.problem.Rm)**2
+        return A_ex / self.L
+
+    @property
+    def rho(self):
+        P = self.problem.p*1e-6 # MPa
+        T = self.problem.t + 273.15 # K
+        print('pres', P)
+        return IAPWS97(P=P, T=T).rho
+
+    def get_W(self):
+        return (self.w_0 + self.w_ex) / 2
+
+    def get_d(self):
+        return (self.w_ex - self.w_0) / (2*self.get_W())
+
+    def get_friction_coeff(self):
+        fc_G = self.friction_coeff_G
+        fc_L = self.friction_coeff_L
+        COD = self.bkmethod.get_COD()
+        case = COD/fc_G
+        if 0 < case < 0.1:
+            fc = fc_L
+        elif 0.1 < case < 10:
+            fc = fc_L + (fc_G - fc_L)/9.9 * (case - 0.1)
+        elif case > 10:
+            fc = fc_G
+        else:
+            raise ValueError(f'Bad case: {case}')
+        return fc
+
+    def get_f(self):
+        friction_coeff = self.get_friction_coeff()
+        return (3.641*np.log10(2*self.get_W()/friction_coeff) - 2.636)**-2
+
+    def get_F(self):
+        return self.get_f()*(self.problem.t/(2*self.get_W()))
+
+    def get_CdI(self, d):
+        return 0.4 * (1 - self.get_d())
+
+    def get_CdII(self, d, F):
+        return (1 - d**2)/(1 + (2*F)**2)
+
+    def get_CdIII(self, d, p_0, p_ex, F, k):
+        return (1 - d**2)/(1 - (p_ex/p_0)**2)**0.5 * (1 + (2*F)**0.5 - k)
+
+    def get_Cd(self):
+        d = self.get_d()
+        F = self.get_F()
+        p_0 = self.p_0
+        p_ex = self.p_ex
+        F1 = (1.5 + 2.5*d)**2/2
+        F2 = ((1-d)*p_0/p_ex - 1)**2/2
+        k = (1-d)*(p_0/p_ex - ((p_0/p_ex)**2 - 1)**0.5)
+        if d > 0:
+            if F < F1:
+                Cd = self.get_CdI(d)
+            elif F1 <= F <= F2:
+                Cd = self.get_CdII(d, F)
+            elif F > F2:
+                Cd = self.get_CdIII(d, p_0, p_ex, F, k)
+            else:
+                raise ValueError(f'd>0 | bad F: {F}')
+        elif d < 0:
+            if F <= F2:
+                Cd = min([0.4, 0.6*(1+d), self.get_CdII(d, F)])
+            elif F > F2:
+                Cd = self.get_CdIII(d, p_0, p_ex, F, k)
+            else:
+                raise ValueError(f'd<0 | bad F: {F}')
+        else:
+            raise ValueError(f'bad d: {d}')
+        return Cd
+
+    def get_Qc(self):
+        return self.get_Cd() * self.get_W() * self.L * (self.p_0 * self.rho)**0.5
+
+    @staticmethod
+    def get_Qld(Q_0, n_q):
+        return Q_0 * n_q
