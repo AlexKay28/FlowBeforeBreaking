@@ -29,6 +29,7 @@ def main(Dout=273e-3,
     # start point data for deffect
     a_0 = t # трещина сквозная
     c_0 = 0
+    print(index)
 
     steel = Steel(C, m, T, Rp02_min, Rp02_max, Rm_min, Rm_max, E_module, mu, steel_type)
     deffect = Deffect(a_0, c_0)
@@ -36,8 +37,10 @@ def main(Dout=273e-3,
     solver  = Solver(problem, deffect, steel, defect_type)
     find2cc = Find2cc(solver, deffect, problem, steel, problem_type)
 
-    x = np.linspace(0, 0.2, 15)
+    x = np.linspace(0, 0.22, 100) #* 2
     y_COA, y_COD = [], []
+    y_Qc, y_Qld = [], []
+    difference = []
     for i in x:
         steel = Steel(C, m, T, Rp02_min, Rp02_max, Rm_min, Rm_max, E_module, mu, steel_type)
         deffect = Deffect(a_0, i)
@@ -46,28 +49,36 @@ def main(Dout=273e-3,
         find2cc = Find2cc(solver, deffect, problem, steel, problem_type)
         bkmethod = B_K_method(deffect, problem, solver, find2cc)
 
-        print(i)
-
         y_COA.append(bkmethod.get_COA())
         y_COD.append(bkmethod.get_COD())
-        print(y_COA[-1], y_COD[-1])
+        #print(y_COA[-1], y_COD[-1])
 
         flow = Flow_Q(deffect, problem, solver, find2cc, bkmethod)
-        print('Qc:', flow.get_Qc() * 60, 'Qld:', flow.get_Qld(1.9, 5))
+        y_Qc.append(flow.get_Qc())
+        #print(i, y_Qc[-1], flow.get_f())
+        y_Qld.append(flow.get_Qld(1.9, 5))
+        difference.append(flow.get_deff_Qc_Qld())
 
-    # plt.figure(figsize=(10, 8))
-    # result_df = pd.DataFrame({
-    #     'Длина трещины, м': x,
-    #     'COA': y_COA, 'COD': y_COD
-    #     })
-    # sns.lineplot(data=result_df, x='Длина трещины, м', y='COA')
-    # sns.lineplot(data=result_df, x='Длина трещины, м', y='COD')
-    # plt.legend(('COA', 'COD'))
-    # plt.title(f'model: dva_c_max={dva_c_max}')
-    # plt.ylabel('Площадь раскрытия (м2)')
-    # plt.savefig(f"COA-COD.png")
+    min_point = np.argmin(difference)
+    Cld = x[min_point]
 
+    fig, ax = plt.subplots(nrows= 1, ncols=2, figsize=(20,6))
+    result_df = pd.DataFrame({
+        'Длина трещины, м': x,
+        'COA': y_COA, 'COD': y_COD,
+        'Qc':  y_Qc,  'Qld': y_Qld,
+        })
+    sns.lineplot(data=result_df, x='Длина трещины, м', y='COA', ax=ax[0])
+    sns.lineplot(data=result_df, x='Длина трещины, м', y='COD', ax=ax[0])
+    sns.lineplot(data=result_df, x='Длина трещины, м', y='Qc', ax=ax[1])
+    sns.lineplot(data=result_df, x='Длина трещины, м', y='Qld', ax=ax[1])
+    ax[0].legend(('COA', 'COD'))
+    ax[1].legend(('Qc', 'Qls'))
+    plt.title(f'model: Cld={round(Cld, 3)}')
+    plt.ylabel('Расходы')
+    plt.savefig(f'figures3/COA-COD_{index}.png')
 
+    return Cld
 
 
 if __name__ == '__main__':

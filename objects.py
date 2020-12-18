@@ -74,6 +74,7 @@ class Problem:
         self.N = N if N else (Nx**2 + Ny**2 + Nz**2)**0.5 # N*m
         self.C = steel.C
         self.m = steel.m
+        self.T = self.steel.T
 
     @property
     def Rout(self):
@@ -192,7 +193,6 @@ class Solver:
 
     @staticmethod
     def calc_K(Y, Sig_eq, a):
-        print(Y, Sig_eq, a)
         return Y * Sig_eq * a ** 0.5
 
     def changing_per_iter(self):
@@ -211,7 +211,6 @@ class Solver:
             change = self.steel.C * (K)**self.problem.m
             res[point] = change
             res['delK_'+point] = K
-            print(res)
         return res
 
 class Find2cc:
@@ -227,10 +226,10 @@ class Find2cc:
     def sig_f(self):
         deffect_type = self.solver.type
         if deffect_type == 'Кольцевой дефект':
-            return 0.42*(self.steel.Rp02_min + self.steel.Rm_min)
+            return 0.42*(self.steel.Rp02_max + self.steel.Rm_max)
         if deffect_type == 'Продольный дефект':
             if self.steel.name in ['Сталь 20', 'Сталь 16ГС']:
-                return 0.5*(self.steel.Rp02_min + self.steel.Rm_min)
+                return 0.5*(self.steel.Rp02_max + self.steel.Rm_max)
         raise ValueError('Steel not found')
 
     def get_solution(self, fun):
@@ -317,7 +316,7 @@ class B_K_method:
         return self.Mu
 
     def get_sig_f(self):
-        return self.find2cc.sig_f
+        return self.find2cc.sig_f / 0.42 * 0.5
 
     @property
     def sig_eqv(self):
@@ -325,7 +324,7 @@ class B_K_method:
 
     @property
     def gamma(self):
-        x = 1/2**0.5 * (self.sig_eqv / self.find2cc.sig_f)
+        x = 1/2**0.5 * (self.sig_eqv / self.get_sig_f())
         return (1-x**3) / (1-x**2)**2
 
     def lambda_(self, c):
@@ -333,23 +332,25 @@ class B_K_method:
 
     def alpha(self, c):
         lambda_ = self.lambda_(c)
-        if lambda_ <= 5:
-            return (1 + 0.117*lambda_**2)**0.5
-        elif lambda_ <= 8 and lambda_ > 5:
-            return 1 + 0.1*lambda_ + 0.16*lambda_**2
-        else:
-            #print(f'WARNING! lambda: {lambda_}>8')
-            return 1 + 0.1*lambda_ + 0.16*lambda_**2
-            #raise ValueError(f'lambda: {lambda_}>8 ')
+        return (1 + 0.117*lambda_**2)**0.5
+
+        # не используется
+        # if lambda_ <= 5:
+        #     return (1 + 0.117*lambda_**2)**0.5
+        # elif lambda_ <= 8 and lambda_ > 5:
+        #     return 1 + 0.1*lambda_ + 0.16*lambda_**2
+        # else:
+        #     #print(f'WARNING! lambda: {lambda_}>8', self.deffect.c)
+        #     return 1 + 0.1*lambda_ + 0.16*lambda_**2
+        #     raise ValueError(f'lambda: {lambda_}>8 ')
 
     def A0(self, c):
-        return 7.54 * (self.sig_eqv / self.E) * c**2
+        return 7.54 * (self.sig_eqv / self.get_E()) * c**2
 
     def get_COA(self):
         c = self.deffect.c
         if c == 0:
             c = 1e-15
-        #print(self.alpha(c), self.gamma, self.A0(c))
         return self.alpha(c) * self.gamma * self.A0(c)
 
     def get_COD(self):
@@ -363,7 +364,7 @@ class Flow_Q:
 
     friction_coeff_G = 33.65*1e-6
     friction_coeff_L = 6.53*1e-6
-    p_ex = 1e5
+    p_ex = 101325
 
     def __init__(self, deffect, problem, solver, find2cc, bkmethod):
         self.deffect = deffect
@@ -380,19 +381,18 @@ class Flow_Q:
 
     @property
     def w_0(self):
-        A_0 = self.bkmethod.get_COA() * (self.problem.Rout/self.problem.Rm)**2
+        A_0 = self.bkmethod.get_COA() * (self.problem.Rin/self.problem.Rm)**2
         return A_0 / self.L
 
     @property
     def w_ex(self):
-        A_ex = self.bkmethod.get_COA() * (self.problem.Rin/self.problem.Rm)**2
+        A_ex = self.bkmethod.get_COA() * (self.problem.Rout/self.problem.Rm)**2
         return A_ex / self.L
 
     @property
     def rho(self):
-        P = self.problem.p*1e-6 # MPa
-        T = self.problem.t + 273.15 # K
-        print('pres', P)
+        P = self.problem.p * 1e-6 # MPa
+        T = self.problem.T + 273.15 # K
         return IAPWS97(P=P, T=T).rho
 
     def get_W(self):
@@ -418,19 +418,19 @@ class Flow_Q:
 
     def get_f(self):
         friction_coeff = self.get_friction_coeff()
-        return (3.641*np.log10(2*self.get_W()/friction_coeff) - 2.636)**-2
+        return (3.64 * np.log10(2*self.get_W()/friction_coeff) - 2.636)**-2
 
     def get_F(self):
-        return self.get_f()*(self.problem.t/(2*self.get_W()))
+        return self.get_f()*(self.problem.t/(self.get_W()))
 
     def get_CdI(self, d):
         return 0.4 * (1 - self.get_d())
 
     def get_CdII(self, d, F):
-        return (1 - d**2)/(1 + (2*F)**2)
+        return (1 - d**2)/(1 + (2*F)**0.5)
 
     def get_CdIII(self, d, p_0, p_ex, F, k):
-        return (1 - d**2)/(1 - (p_ex/p_0)**2)**0.5 * (1 + (2*F)**0.5 - k)
+        return (1 - d**2)/((1 - (p_ex/p_0)**2)**0.5 * (1 + (2*F)**0.5 - k))
 
     def get_Cd(self):
         d = self.get_d()
@@ -438,19 +438,20 @@ class Flow_Q:
         p_0 = self.p_0
         p_ex = self.p_ex
         F1 = (1.5 + 2.5*d)**2/2
-        F2 = ((1-d)*p_0/p_ex - 1)**2/2
-        k = (1-d)*(p_0/p_ex - ((p_0/p_ex)**2 - 1)**0.5)
+        F2 = ((1-d)*(p_0/p_ex) - 1)**2/2
+        k = (1-d)*((p_0/p_ex) - ((p_0/p_ex)**2 - 1)**0.5)
+
         if d > 0:
             if F < F1:
                 Cd = self.get_CdI(d)
-            elif F1 <= F <= F2:
+            elif F1 < F < F2:
                 Cd = self.get_CdII(d, F)
             elif F > F2:
                 Cd = self.get_CdIII(d, p_0, p_ex, F, k)
             else:
                 raise ValueError(f'd>0 | bad F: {F}')
         elif d < 0:
-            if F <= F2:
+            if F < F2:
                 Cd = min([0.4, 0.6*(1+d), self.get_CdII(d, F)])
             elif F > F2:
                 Cd = self.get_CdIII(d, p_0, p_ex, F, k)
@@ -461,8 +462,12 @@ class Flow_Q:
         return Cd
 
     def get_Qc(self):
-        return self.get_Cd() * self.get_W() * self.L * (self.p_0 * self.rho)**0.5
+        Qc_per_sec = self.get_Cd() * self.get_W() * self.L * (self.p_0 * self.rho)**0.5
+        return Qc_per_sec*60
 
     @staticmethod
-    def get_Qld(Q_0, n_q):
+    def get_Qld(Q_0=1.9, n_q=5):
         return Q_0 * n_q
+
+    def get_deff_Qc_Qld(self):
+        return abs(self.get_Qc() - self.get_Qld())
